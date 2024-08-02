@@ -26,19 +26,35 @@
 
 #include "ft_types.h"
 
+#if HAS_X_AXIS && (HAS_Z_AXIS || HAS_EXTRUDERS)
+  #define HAS_DYNAMIC_FREQ 1
+  #if HAS_Z_AXIS
+    #define HAS_DYNAMIC_FREQ_MM 1
+  #endif
+  #if HAS_EXTRUDERS
+    #define HAS_DYNAMIC_FREQ_G 1
+  #endif
+#endif
 
 typedef struct FTConfig {
-  ftMotionMode_t mode = FTM_DEFAULT_MODE;                 // Mode / active compensation mode configuration.
+  bool active = ENABLED(FTM_IS_DEFAULT_MOTION);           // Active (else standard motion)
 
   #if HAS_X_AXIS
-    ftMotionCmpnstr_t cmpnstr[1 + ENABLED(HAS_Y_AXIS)] =               // Compensation mode.
-      { FTM_DEFAULT_X_COMPENSATOR OPTARG(HAS_Y_AXIS, FTM_DEFAULT_Y_COMPENSATOR) };
+    ftMotionShaper_t shaper[1 + ENABLED(HAS_Y_AXIS)] =    // Shaper type
+      { FTM_DEFAULT_SHAPER_X OPTARG(HAS_Y_AXIS, FTM_DEFAULT_SHAPER_Y) };
     float baseFreq[1 + ENABLED(HAS_Y_AXIS)] =             // Base frequency. [Hz]
       { FTM_SHAPING_DEFAULT_X_FREQ OPTARG(HAS_Y_AXIS, FTM_SHAPING_DEFAULT_Y_FREQ) };
     float zeta[1 + ENABLED(HAS_Y_AXIS)] =                 // Damping factor
-        { FTM_SHAPING_DEFAULT_ZETA_X OPTARG(HAS_Y_AXIS, FTM_SHAPING_DEFAULT_ZETA_Y) };
+      { FTM_SHAPING_ZETA_X OPTARG(HAS_Y_AXIS, FTM_SHAPING_ZETA_Y) };
     float vtol[1 + ENABLED(HAS_Y_AXIS)] =                 // Vibration Level
-        { FTM_SHAPING_DEFAULT_V_TOL_X OPTARG(HAS_Y_AXIS, FTM_SHAPING_DEFAULT_V_TOL_Y) };
+      { FTM_SHAPING_V_TOL_X OPTARG(HAS_Y_AXIS, FTM_SHAPING_V_TOL_Y) };
+  #endif
+
+  #if HAS_DYNAMIC_FREQ
+    dynFreqMode_t dynFreqMode = FTM_DEFAULT_DYNFREQ_MODE; // Dynamic frequency mode configuration.
+    float dynFreqK[1 + ENABLED(HAS_Y_AXIS)] = { 0.0f };   // Scaling / gain for dynamic frequency. [Hz/mm] or [Hz/g]
+  #else
+    static constexpr dynFreqMode_t dynFreqMode = dynFreqMode_DISABLED;
   #endif
 
   #if HAS_EXTRUDERS
@@ -53,32 +69,36 @@ class FTMotion {
 
     // Public variables
     static ft_config_t cfg;
-    static ftMotionTrajGenConfig_t traj_gen_cfg;
     static bool busy;
 
     static void set_defaults() {
-      cfg.mode = FTM_DEFAULT_MODE;
+      cfg.active = ENABLED(FTM_IS_DEFAULT_MOTION);
 
-      TERN_(HAS_X_AXIS, cfg.cmpnstr[X_AXIS] = FTM_DEFAULT_X_COMPENSATOR);
-      TERN_(HAS_Y_AXIS, cfg.cmpnstr[Y_AXIS] = FTM_DEFAULT_Y_COMPENSATOR);
+      #if HAS_X_AXIS
+        cfg.shaper[X_AXIS] = FTM_DEFAULT_SHAPER_X;
+        cfg.baseFreq[X_AXIS] = FTM_SHAPING_DEFAULT_X_FREQ;
+        cfg.zeta[X_AXIS] = FTM_SHAPING_ZETA_X;
+        cfg.vtol[X_AXIS] = FTM_SHAPING_V_TOL_X;
+      #endif
 
-      TERN_(HAS_X_AXIS, cfg.baseFreq[X_AXIS] = FTM_SHAPING_DEFAULT_X_FREQ);
-      TERN_(HAS_Y_AXIS, cfg.baseFreq[Y_AXIS] = FTM_SHAPING_DEFAULT_Y_FREQ);
+      #if HAS_Y_AXIS
+        cfg.shaper[Y_AXIS] = FTM_DEFAULT_SHAPER_Y;
+        cfg.baseFreq[Y_AXIS] = FTM_SHAPING_DEFAULT_Y_FREQ;
+        cfg.zeta[Y_AXIS] = FTM_SHAPING_ZETA_Y;
+        cfg.vtol[Y_AXIS] = FTM_SHAPING_V_TOL_Y;
+      #endif
 
-      TERN_(HAS_X_AXIS, cfg.zeta[X_AXIS] = FTM_SHAPING_DEFAULT_ZETA_X);
-      TERN_(HAS_Y_AXIS, cfg.zeta[Y_AXIS] = FTM_SHAPING_DEFAULT_ZETA_Y);
-
-      TERN_(HAS_X_AXIS, cfg.vtol[X_AXIS] = FTM_SHAPING_DEFAULT_V_TOL_X);
-      TERN_(HAS_Y_AXIS, cfg.vtol[Y_AXIS] = FTM_SHAPING_DEFAULT_V_TOL_Y);
+      #if HAS_DYNAMIC_FREQ
+        cfg.dynFreqMode = FTM_DEFAULT_DYNFREQ_MODE;
+        cfg.dynFreqK[X_AXIS] = TERN_(HAS_Y_AXIS, cfg.dynFreqK[Y_AXIS]) = 0.0f;
+      #endif
 
       #if HAS_EXTRUDERS
         cfg.linearAdvEna = FTM_LINEAR_ADV_DEFAULT_ENA;
         cfg.linearAdvK = FTM_LINEAR_ADV_DEFAULT_K;
       #endif
 
-      #if HAS_X_AXIS
-        update_shaping_params();
-      #endif
+      TERN_(HAS_X_AXIS, update_shaping_params());
 
       reset();
     }
@@ -89,24 +109,16 @@ class FTMotion {
 
     static bool sts_stepperBusy;                          // The stepper buffer has items and is in use.
 
-    static millis_t axis_pos_move_end_ti[NUM_AXIS_ENUMS],
-                    axis_neg_move_end_ti[NUM_AXIS_ENUMS];
-
     // Public methods
     static void init();
     static void loop();                                   // Controller main, to be invoked from non-isr task.
 
     #if HAS_X_AXIS
-      // Refreshes the gains and indices used by shaping functions.
+      // Refresh gains and indices used by shaping functions.
       static void update_shaping_params(void);
     #endif
 
     static void reset();                                  // Reset all states of the fixed time conversion to defaults.
-
-    static void setup_traj_gen(uint32_t intervals);
-
-    static bool axis_moving_pos(const AxisEnum axis) { return !ELAPSED(millis(), axis_pos_move_end_ti[axis]); }
-    static bool axis_moving_neg(const AxisEnum axis) { return !ELAPSED(millis(), axis_neg_move_end_ti[axis]); }
 
   private:
 
@@ -144,19 +156,19 @@ class FTMotion {
     #if HAS_X_AXIS
 
       typedef struct AxisShaping {
-        bool ena;                         // Enabled indication.
-        float d_zi[FTM_ZMAX];             // Data point delay vector.
+        bool ena = false;                 // Enabled indication.
+        float d_zi[FTM_ZMAX] = { 0.0f };  // Data point delay vector.
         float Ai[5];                      // Shaping gain vector.
         uint32_t Ni[5];                   // Shaping time index vector.
         uint32_t max_i;                   // Vector length for the selected shaper.
 
-        void set_axis_shaping_N(const ftMotionCmpnstr_t shaper, const_float_t f, const_float_t zeta);    // Sets the gains used by shaping functions.
-        void set_axis_shaping_A(const ftMotionCmpnstr_t shaper, const_float_t zeta, const_float_t vtol); // Sets the indices used by shaping functions.
+        void set_axis_shaping_N(const ftMotionShaper_t shaper, const_float_t f, const_float_t zeta);    // Sets the gains used by shaping functions.
+        void set_axis_shaping_A(const ftMotionShaper_t shaper, const_float_t zeta, const_float_t vtol); // Sets the indices used by shaping functions.
 
       } axis_shaping_t;
 
       typedef struct Shaping {
-        uint32_t zi_idx;           // Index of storage in the data point delay vectors.   
+        uint32_t zi_idx;           // Index of storage in the data point delay vectors.
         axis_shaping_t x;
         #if HAS_Y_AXIS
           axis_shaping_t y;

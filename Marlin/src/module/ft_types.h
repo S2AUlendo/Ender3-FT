@@ -23,55 +23,33 @@
 
 #include "../core/types.h"
 
-typedef enum FXDTICtrlMode : uint8_t {
-  ftMotionMode_DISABLED   =  0, // Standard Motion
-  ftMotionMode_ENABLED    =  1  // Time-Based Motion
-} ftMotionMode_t;
+typedef enum FXDTICtrlShaper : uint8_t {
+  ftMotionShaper_NONE  = 0, // No compensator
+  ftMotionShaper_ZV    = 1, // Zero Vibration
+  ftMotionShaper_ZVD   = 2, // Zero Vibration and Derivative
+  ftMotionShaper_ZVDD  = 3, // Zero Vibration, Derivative, and Double Derivative
+  ftMotionShaper_ZVDDD = 4, // Zero Vibration, Derivative, Double Derivative, and Triple Derivative
+  ftMotionShaper_EI    = 5, // Extra-Intensive
+  ftMotionShaper_2HEI  = 6, // 2-Hump Extra-Intensive
+  ftMotionShaper_3HEI  = 7, // 3-Hump Extra-Intensive
+  ftMotionShaper_MZV   = 8  // Modified Zero Vibration
+} ftMotionShaper_t;
 
-typedef enum FXDTICtrlCmpnstr : uint8_t {
-  ftMotionCmpnstr_NONE       = 0, // No compensator
-  ftMotionCmpnstr_ZV         = 1, // Zero Vibration
-  ftMotionCmpnstr_ZVD        = 2, // Zero Vibration and Derivative
-  ftMotionCmpnstr_ZVDD       = 3, // Zero Vibration, Derivative, and Double Derivative
-  ftMotionCmpnstr_ZVDDD      = 4, // Zero Vibration, Derivative, Double Derivative, and Triple Derivative
-  ftMotionCmpnstr_EI         = 5, // Extra-Intensive
-  ftMotionCmpnstr_2HEI       = 6, // 2-Hump Extra-Intensive
-  ftMotionCmpnstr_3HEI       = 7, // 3-Hump Extra-Intensive
-  ftMotionCmpnstr_MZV        = 8  // Modified Zero Vibration
-} ftMotionCmpnstr_t;
+enum dynFreqMode_t : uint8_t {
+  dynFreqMode_DISABLED   = 0,
+  dynFreqMode_Z_BASED    = 1,
+  dynFreqMode_MASS_BASED = 2
+};
 
-typedef enum FXDTICtrlTrajGenMode : uint8_t {
-  trajGenMode_NONE       =  0U,
-  trajGenMode_SWEEPC_X   =  1U,
-  trajGenMode_SWEEPC_Y   =  2U,
-  trajGenMode_ABORT      = 99U,
-} ftMotionTrajGenMode_t;
-
-typedef struct FXDTICtrlTrajGenConfig {
-  ftMotionTrajGenMode_t mode = trajGenMode_NONE;
-  float f0 = 0.0f,
-        f1 = 0.0f,
-        dfdt = 0.0f,
-        a = 0.0f,
-        pcws_ti[6] = {0.0f},
-        k1 = 0.0f,
-        k2 = 0.0f,
-        step_ti = 0.0f,
-        step_a = 0.0f,
-        dly1_ti = 0.0f,
-        dly2_ti = 0.0f,
-        dly3_ti = 0.0f,
-        step_a_x_0p5 = 0.0f,
-        step_a_x_step_ti_x_step_ti = 0.0f,
-        step_ti_x_2 = 0.0f,
-        step_ti_x_3 = 0.0f,
-        step_ti_x_4 = 0.0f;
-} ftMotionTrajGenConfig_t;
+#define CMPNSTR_HAS_SHAPER(A) (ftMotion.cfg.shaper[A] != ftMotionShaper_NONE)
+#define CMPNSTR_IS_EISHAPER(A) WITHIN(ftMotion.cfg.shaper[A], ftMotionShaper_EI, ftMotionShaper_3HEI)
 
 typedef struct XYZEarray<float, FTM_WINDOW_SIZE> xyze_trajectory_t;
 typedef struct XYZEarray<float, FTM_BATCH_SIZE> xyze_trajectoryMod_t;
 
+// TODO: Convert ft_command_t to a struct with bitfields instead of using a primitive type
 enum {
+  FT_BIT_START,
   LIST_N(DOUBLE(LOGICAL_AXES),
     FT_BIT_DIR_E, FT_BIT_STEP_E,
     FT_BIT_DIR_X, FT_BIT_STEP_X, FT_BIT_DIR_Y, FT_BIT_STEP_Y, FT_BIT_DIR_Z, FT_BIT_STEP_Z,

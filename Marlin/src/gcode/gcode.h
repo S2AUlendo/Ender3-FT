@@ -606,7 +606,7 @@ private:
 
   #if SAVED_POSITIONS
     static void G60();
-    static void G61(int8_t slot=-1);
+    static void G61();
   #endif
 
   #if ENABLED(GCODE_MOTION_MODES)
@@ -1075,6 +1075,7 @@ private:
   #if ENABLED(FT_MOTION)
     static void M493();
     static void M493_report(const bool forReplay=true);
+    static void M494();
   #endif
 
   static void M500();

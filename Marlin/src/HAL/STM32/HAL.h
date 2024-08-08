@@ -27,7 +27,6 @@
 #include "../shared/Marduino.h"
 #include "../shared/math_32bit.h"
 #include "../shared/HAL_SPI.h"
-#include "temp_soc.h"
 #include "fastio.h"
 #include "Servo.h"
 #include "MarlinSerial.h"
@@ -112,16 +111,8 @@
   #else
     #error "LCD_SERIAL_PORT must be from 1 to 9, or -1 for Native USB."
   #endif
-  #if ANY(HAS_DGUS_LCD, EXTENSIBLE_UI)
+  #if HAS_DGUS_LCD
     #define LCD_SERIAL_TX_BUFFER_FREE() LCD_SERIAL.availableForWrite()
-  #endif
-#endif
-
-#ifdef RS485_SERIAL_PORT
-  #if WITHIN(RS485_SERIAL_PORT, 1, 9)
-    #define RS485_SERIAL MSERIAL(RS485_SERIAL_PORT)
-  #else
-    #error "RS485_SERIAL_PORT must be from 1 to 9."
   #endif
 #endif
 
@@ -129,7 +120,7 @@
  * TODO: review this to return 1 for pins that are not analog input
  */
 #ifndef analogInputToDigitalPin
-  #define analogInputToDigitalPin(p) pin_t(p)
+  #define analogInputToDigitalPin(p) (p)
 #endif
 
 //

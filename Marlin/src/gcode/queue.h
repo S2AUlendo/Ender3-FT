@@ -134,7 +134,7 @@ public:
    * Aborts the current SRAM queue so only use for one or two commands.
    */
   static void inject(const char * const gcode) {
-    strlcpy(injected_commands, gcode, sizeof(injected_commands));
+    strncpy(injected_commands, gcode, sizeof(injected_commands) - 1);
   }
 
   /**
@@ -212,9 +212,6 @@ public:
    */
   static void set_current_line_number(long n) { serial_state[ring_buffer.command_port().index].last_N = n; }
 
-  /**
-   * Get the current line number for the last received command
-   */
   static long get_current_line_number() { return serial_state[ring_buffer.command_port().index].last_N; }
 
   #if ENABLED(BUFFER_MONITORING)
@@ -263,6 +260,10 @@ private:
 
   #if HAS_MEDIA
     static void get_sdcard_commands();
+  #endif
+
+  #if ENABLED(CANFILE)
+    static void get_can_commands();
   #endif
 
   // Process the next "immediate" command (PROGMEM)

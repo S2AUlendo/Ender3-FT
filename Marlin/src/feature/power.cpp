@@ -34,8 +34,9 @@
 #include "../module/temperature.h"
 #include "../MarlinCore.h"
 
-#if ENABLED(MAX7219_REINIT_ON_POWERUP)
-  #include "max7219.h"
+#if ENABLED(CREATBOT_LINUX_LCD)
+  #include "../lcd/extui/ui_api.h"
+  #include "../canOpen/canOpen.h"
 #endif
 
 #if ENABLED(PS_OFF_SOUND)
@@ -57,15 +58,7 @@ bool Power::psu_on;
     #include "controllerfan.h"
   #endif
 
-  #if ANY(LASER_FEATURE, SPINDLE_FEATURE)
-    #include "spindle_laser.h"
-  #endif
-
   millis_t Power::lastPowerOn;
-#endif
-
-#if PSU_TRACK_STATE_MS
-  millis_t Power::last_state_change_ms = 0;
 #endif
 
 /**
@@ -95,18 +88,9 @@ void Power::power_on() {
   #endif
 
   OUT_WRITE(PS_ON_PIN, PSU_ACTIVE_STATE);
-  #if ENABLED(PSU_OFF_REDUNDANT)
-    OUT_WRITE(PS_ON1_PIN, TERN_(PSU_OFF_REDUNDANT_INVERTED, !)PSU_ACTIVE_STATE);
-  #endif
-  TERN_(PSU_TRACK_STATE_MS, last_state_change_ms = millis());
-
   psu_on = true;
   safe_delay(PSU_POWERUP_DELAY);
-
   restore_stepper_drivers();
-
-  TERN_(MAX7219_REINIT_ON_POWERUP, max7219.init());
-
   TERN_(HAS_TRINAMIC_CONFIG, safe_delay(PSU_POWERUP_DELAY));
 
   #ifdef PSU_POWERUP_GCODE
@@ -119,6 +103,18 @@ void Power::power_on() {
  * Processes any PSU_POWEROFF_GCODE and makes a PS_OFF_SOUND if enabled.
  */
 void Power::power_off() {
+  #if ENABLED(CREATBOT_LINUX_LCD)
+    static uint8_t cnt = 7;
+    settings.save();               /*关机时保存*/
+    if(getLCDState()){
+      ExtUI::onPowerOffSafety();   /*安全关机通知*/
+      while(cnt--){
+        hal.watchdog_refresh();
+        delay(500);
+      }
+    }
+  #endif
+
   TERN_(HAS_SUICIDE, suicide());
 
   if (!psu_on) return;
@@ -134,11 +130,6 @@ void Power::power_off() {
   #endif
 
   OUT_WRITE(PS_ON_PIN, !PSU_ACTIVE_STATE);
-  #if ENABLED(PSU_OFF_REDUNDANT)
-    OUT_WRITE(PS_ON1_PIN, IF_DISABLED(PSU_OFF_REDUNDANT_INVERTED, !)PSU_ACTIVE_STATE);
-  #endif
-  TERN_(PSU_TRACK_STATE_MS, last_state_change_ms = millis());
-
   psu_on = false;
 
   #if ANY(POWER_OFF_TIMER, POWER_OFF_WAIT_FOR_COOLDOWN)
@@ -185,6 +176,15 @@ void Power::power_off() {
 
   void Power::checkAutoPowerOff() {
     if (TERN1(POWER_OFF_TIMER, !power_off_time) && TERN1(POWER_OFF_WAIT_FOR_COOLDOWN, !power_off_on_cooldown)) return;
+
+    // 如果触发断电信号, 不进行任何等待操作,直接关机
+    #if ENABLED(POWER_LOSS_RECOVERY) && PIN_EXISTS(POWER_LOSS)
+    if (READ(POWER_LOSS_PIN) == POWER_LOSS_STATE) {
+      power_off();
+      return;
+    }
+    #endif
+
     if (TERN0(POWER_OFF_WAIT_FOR_COOLDOWN, power_off_on_cooldown && is_cooling_needed())) return;
     if (TERN0(POWER_OFF_TIMER, power_off_time && PENDING(millis(), power_off_time))) return;
     power_off();
@@ -201,12 +201,14 @@ void Power::power_off() {
   /**
    * Check all conditions that would signal power needing to be on.
    *
-   * @return bool  if power is needed
+   * @returns bool  if power is needed
    */
   bool Power::is_power_needed() {
 
     // If any of the stepper drivers are enabled...
+    #if DISABLED(HAS_DISABLE_IDLE_AXES)
     if (stepper.axis_enabled.bits) return true;
+    #endif
 
     if (printJobOngoing() || printingIsPaused()) return true;
 
@@ -222,23 +224,21 @@ void Power::power_off() {
       if (controllerFan.state()) return true;
     #endif
 
-    #if ANY(LASER_FEATURE, SPINDLE_FEATURE)
-      if (TERN0(AUTO_POWER_SPINDLE_LASER, cutter.enabled())) return true;
-    #endif
-
     if (TERN0(AUTO_POWER_CHAMBER_FAN, thermalManager.chamberfan_speed))
       return true;
 
     if (TERN0(AUTO_POWER_COOLER_FAN, thermalManager.coolerfan_speed))
       return true;
 
+    #if DISABLED(POWER_OFF_WAIT_FOR_COOLDOWN)
     #if HAS_HOTEND
       HOTEND_LOOP() if (thermalManager.degTargetHotend(e) > 0 || thermalManager.temp_hotend[e].soft_pwm_amount > 0) return true;
     #endif
 
     if (TERN0(HAS_HEATED_BED, thermalManager.degTargetBed() > 0 || thermalManager.temp_bed.soft_pwm_amount > 0)) return true;
+    #endif
 
-    return is_cooling_needed();
+    return TERN1(POWER_OFF_WAIT_FOR_COOLDOWN, power_off_on_cooldown) && is_cooling_needed();
   }
 
   /**
@@ -262,7 +262,20 @@ void Power::power_off() {
       if (is_power_needed())
         power_on();
       else if (!lastPowerOn || (POWER_TIMEOUT > 0 && ELAPSED(now, lastPowerOn + SEC_TO_MS(POWER_TIMEOUT))))
-        power_off();
+        TERN(POWER_OFF_WAIT_FOR_COOLDOWN, powerOffOnCooldown(), power_off());
+    }
+  }
+
+  /**
+   * 获取自动关机前剩余的时间
+   */
+  millis_t Power::getAliveTime() {
+    constexpr millis_t timeout = POWER_TIMEOUT > 0 ? SEC_TO_MS(POWER_TIMEOUT) : 0;
+    const millis_t     now     = millis();
+    if (PENDING(now, lastPowerOn + timeout)) {
+      return lastPowerOn + timeout - now;
+    } else {
+      return 0;
     }
   }
 

@@ -132,12 +132,6 @@ public:
     static void autofile_cancel() { autofile_index = 0; }
   #endif
 
-  #if ENABLED(ONE_CLICK_PRINT)
-    static bool one_click_check();  // Check for the newest file and prompt to run it.
-    static void diveToNewestFile(MediaFile parent, uint32_t &compareDateTime, MediaFile &outdir, char * const outname);
-    static bool selectNewestFile();
-  #endif
-
   // Basic file ops
   static void openFileRead(const char * const path, const uint8_t subcall=0);
   static void openFileWrite(const char * const path);
@@ -145,10 +139,13 @@ public:
   static bool fileExists(const char * const name);
   static void removeFile(const char * const name);
 
+#if ENABLED(UTF_IS_UTF16)
+  static char *longest_filename() { return (longFilename[0] || longFilename[1]) ? longFilename : filename; }
+#else
   static char* longest_filename() { return longFilename[0] ? longFilename : filename; }
+#endif
   #if ENABLED(LONG_FILENAME_HOST_SUPPORT)
     static void printLongPath(char * const path);   // Used by M33
-    static void getLongPath(char * const pathLong, char * const pathShort); // Used by anycubic_vyper
   #endif
 
   // Working Directory for SD card menu
@@ -158,6 +155,7 @@ public:
   static int16_t get_num_items();
 
   // Select a file
+  static bool selectNextValidFile(dir_t *p);
   static void selectFileByIndex(const int16_t nr);
   static void selectFileByName(const char * const match);  // (working directory only)
 
@@ -170,20 +168,20 @@ public:
   static void endFilePrintNow(TERN_(SD_RESORT, const bool re_sort=false));
   static void abortFilePrintNow(TERN_(SD_RESORT, const bool re_sort=false));
   static void fileHasFinished();
-  static void abortFilePrintSoon() { flag.abort_sd_printing = isFileOpen(); }
+  static void abortFilePrintSoon();
   static void pauseSDPrint()       { flag.sdprinting = false; }
   static bool isPrinting()         { return flag.sdprinting; }
   static bool isPaused()           { return isFileOpen() && !isPrinting(); }
   #if HAS_PRINT_PROGRESS_PERMYRIAD
     static uint16_t permyriadDone() {
       if (flag.sdprintdone) return 10000;
-      if (isFileOpen() && filesize) return sdpos / ((filesize + 9999) / 10000);
+      if (isFileOpen() && filesize) return sdpos * 10000.0 / filesize;
       return 0;
     }
   #endif
   static uint8_t percentDone() {
     if (flag.sdprintdone) return 100;
-    if (isFileOpen() && filesize) return sdpos / ((filesize + 99) / 100);
+    if (isFileOpen() && filesize) return sdpos * 100.0 / filesize;
     return 0;
   }
 
@@ -369,7 +367,7 @@ private:
 
 #define IS_SD_PRINTING()  (card.flag.sdprinting && !card.flag.abort_sd_printing)
 #define IS_SD_FETCHING()  (!card.flag.sdprintdone && IS_SD_PRINTING())
-#define IS_SD_PAUSED()    card.isPaused()
+#define IS_SD_PAUSED()    (card.isPaused() && !card.flag.abort_sd_printing)
 #define IS_SD_FILE_OPEN() card.isFileOpen()
 
 extern CardReader card;

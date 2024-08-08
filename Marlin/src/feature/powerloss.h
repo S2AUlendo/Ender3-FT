@@ -38,13 +38,14 @@
   #include "../feature/mixing.h"
 #endif
 
+#if ENABLED(DUAL_X_CARRIAGE)
+  #include "../module/motion.h"
+#endif
+
 #if !defined(POWER_LOSS_STATE) && PIN_EXISTS(POWER_LOSS)
   #define POWER_LOSS_STATE HIGH
 #endif
 
-#if DISABLED(BACKUP_POWER_SUPPLY)
-  #undef POWER_LOSS_ZRAISE    // No Z raise at outage without backup power
-#endif
 #ifndef POWER_LOSS_ZRAISE
   #define POWER_LOSS_ZRAISE 2 // Default Z-raise on outage or resume
 #endif
@@ -53,14 +54,14 @@
 //#define SAVE_EACH_CMD_MODE
 //#define SAVE_INFO_INTERVAL_MS 0
 
+#pragma pack (1)
+
 typedef struct {
   uint8_t valid_head;
 
   // Machine state
   xyze_pos_t current_position;
   uint16_t feedrate;
-  int16_t feedrate_percentage;
-  uint16_t flow_percentage[EXTRUDERS];
 
   float zraise;
 
@@ -72,11 +73,17 @@ typedef struct {
   #if HAS_HOME_OFFSET
     xyz_pos_t home_offset;
   #endif
-  #if HAS_WORKSPACE_OFFSET
-    xyz_pos_t workspace_offset;
+  #if HAS_POSITION_SHIFT
+    xyz_pos_t position_shift;
   #endif
   #if HAS_MULTI_EXTRUDER
     uint8_t active_extruder;
+  #endif
+
+  #if ENABLED(DUAL_X_CARRIAGE)
+    DualXMode  dual_x_mode;
+    float      dual_x_offset;
+    celsius_t  dual_temp_offset;
   #endif
 
   #if DISABLED(NO_VOLUMETRICS)
@@ -88,9 +95,6 @@ typedef struct {
   #endif
   #if HAS_HEATED_BED
     celsius_t target_temperature_bed;
-  #endif
-  #if HAS_HEATED_CHAMBER
-    celsius_t target_temperature_chamber;
   #endif
   #if HAS_FAN
     uint8_t fan_speed[FAN_COUNT];
@@ -113,9 +117,13 @@ typedef struct {
     #endif
   #endif
 
-  // SD Filename and position
+  // Filename and position
+  #if ENABLED(SDSUPPORT)
   char sd_filename[MAXPATHNAMELENGTH];
   volatile uint32_t sdpos;
+  #elif ENABLED(CANFILE)
+  volatile uint32_t canfilepos;
+  #endif
 
   // Job elapsed time
   millis_t print_job_elapsed;
@@ -138,27 +146,41 @@ typedef struct {
 
   uint8_t valid_foot;
 
-  bool valid() { return valid_head && valid_head == valid_foot; }
+  bool valid() { return valid_head && valid_head == valid_foot && valid_head != 0xff; }
 
 } job_recovery_info_t;
 
+#pragma pack ()
+
 class PrintJobRecovery {
   public:
+  #if ENABLED(SDSUPPORT)
     static const char filename[5];
 
     static MediaFile file;
+    static uint32_t cmd_sdpos,        //!< SD position of the next command
+                    sdpos[BUFSIZE];   //!< SD positions of queued commands
+  #elif ENABLED(CANFILE)
+    static uint32_t cmd_canfilepos,        //!< canFile position of the next command
+                    canfilepos[BUFSIZE];   //!< canFile positions of queued commands
+    static bool state;
+  #endif
+
     static job_recovery_info_t info;
 
     static uint8_t queue_index_r;     //!< Queue index of the active command
-    static uint32_t cmd_sdpos,        //!< SD position of the next command
-                    sdpos[BUFSIZE];   //!< SD positions of queued commands
 
-    #if HAS_PLR_UI_FLAG
-      static bool ui_flag_resume;     //!< Flag the UI to show a dialog to Resume (M1000) or Cancel (M1000C)
+    static bool recoveryPrepare;
+
+    #if HAS_DWIN_E3V2_BASIC
+      static bool dwin_flag;
     #endif
 
     static void init();
-    static void prepare();
+
+    #if ENABLED(SDSUPPORT)
+      static void prepare();
+    #endif
 
     static void setup() {
       #if PIN_EXISTS(OUTAGECON)
@@ -176,20 +198,26 @@ class PrintJobRecovery {
     }
 
     // Track each command's file offsets
-    static uint32_t command_sdpos() { return sdpos[queue_index_r]; }
-    static void commit_sdpos(const uint8_t index_w) { sdpos[index_w] = cmd_sdpos; }
+    #if ENABLED(SDSUPPORT)
+      static uint32_t command_sdpos() { return sdpos[queue_index_r]; }
+      static void sync_sdpos() { sdpos[queue_index_r] = info.sdpos; }
+      static void commit_sdpos(const uint8_t index_w) { sdpos[index_w] = cmd_sdpos; }
+
+      static bool exists() { return card.jobRecoverFileExists(); }
+      static void open(const bool read) { card.openJobRecoveryFile(read); }
+      static void close() { file.close(); }
+    #elif ENABLED(CANFILE)
+      static uint32_t command_canfilepos() { return canfilepos[queue_index_r]; }
+      static void sync_canfilepos() { canfilepos[queue_index_r] = info.canfilepos; }
+      static void commit_canfilepos(const uint8_t index_w) { canfilepos[index_w] = cmd_canfilepos; }
+      static void handleCanfile(const bool onoff);
+    #endif 
+    
+    static void sync_curPos();
 
     static bool enabled;
     static void enable(const bool onoff);
     static void changed();
-
-    #if HAS_PLR_BED_THRESHOLD
-      static celsius_t bed_temp_threshold;
-    #endif
-
-    static bool exists() { return card.jobRecoverFileExists(); }
-    static void open(const bool read) { card.openJobRecoveryFile(read); }
-    static void close() { file.close(); }
 
     static bool check();
     static void resume();
@@ -201,12 +229,13 @@ class PrintJobRecovery {
     static void save(const bool force=ENABLED(SAVE_EACH_CMD_MODE), const float zraise=POWER_LOSS_ZRAISE, const bool raised=false);
 
     #if PIN_EXISTS(POWER_LOSS)
+      static void outageAction();
       static void outage() {
         static constexpr uint8_t OUTAGE_THRESHOLD = 3;
         static uint8_t outage_counter = 0;
         if (enabled && READ(POWER_LOSS_PIN) == POWER_LOSS_STATE) {
-          outage_counter++;
-          if (outage_counter >= OUTAGE_THRESHOLD) _outage();
+          if (outage_counter < UINT8_MAX) outage_counter++;
+          if (outage_counter == OUTAGE_THRESHOLD) outageAction();
         }
         else
           outage_counter = 0;
@@ -214,9 +243,17 @@ class PrintJobRecovery {
     #endif
 
     // The referenced file exists
-    static bool interrupted_file_exists() { return card.fileExists(info.sd_filename); }
+    #if ENABLED(SDSUPPORT)
+      static bool interrupted_file_exists() { return card.fileExists(info.sd_filename); }
 
-    static bool valid() { return info.valid() && interrupted_file_exists(); }
+      #if ENABLED(RECOVERY_USE_EEPROM)
+        static bool valid() { return info.valid(); }
+      #else
+        static bool valid() { return info.valid() && interrupted_file_exists(); }
+      #endif
+    #elif ENABLED(CANFILE)
+      static bool valid() { return info.valid(); }
+    #endif
 
     #if ENABLED(DEBUG_POWER_LOSS_RECOVERY)
       static void debug(FSTR_P const prefix);

@@ -39,6 +39,9 @@
 #if ENABLED(SINGLENOZZLE)
   #define _ALT_P active_extruder
   #define _CNT_P EXTRUDERS
+#elif ENABLED(SINGLE_PART_COOLING_FAN)
+  #define _ALT_P 0
+  #define _CNT_P FAN_COUNT
 #else
   #define _ALT_P _MIN(active_extruder, FAN_COUNT - 1)
   #define _CNT_P FAN_COUNT
@@ -61,7 +64,9 @@
 void GcodeSuite::M106() {
   const uint8_t pfan = parser.byteval('P', _ALT_P);
   if (pfan >= _CNT_P) return;
-  if (FAN_IS_REDUNDANT(pfan)) return;
+  #if REDUNDANT_PART_COOLING_FAN
+    if (pfan == REDUNDANT_PART_COOLING_FAN) return;
+  #endif
 
   #if ENABLED(EXTRA_FAN_SPEED)
     const uint16_t t = parser.intval('T');
@@ -100,7 +105,9 @@ void GcodeSuite::M106() {
 void GcodeSuite::M107() {
   const uint8_t pfan = parser.byteval('P', _ALT_P);
   if (pfan >= _CNT_P) return;
-  if (FAN_IS_REDUNDANT(pfan)) return;
+  #if REDUNDANT_PART_COOLING_FAN
+    if (pfan == REDUNDANT_PART_COOLING_FAN) return;
+  #endif
 
   thermalManager.set_fan_speed(pfan, 0);
 

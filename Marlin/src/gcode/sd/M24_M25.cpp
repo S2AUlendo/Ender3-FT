@@ -41,7 +41,7 @@
   #include "../../feature/powerloss.h"
 #endif
 
-#if DGUS_LCD_UI_MKS
+#if ENABLED(DGUS_LCD_UI_MKS)
   #include "../../lcd/extui/dgus/DGUSDisplayDef.h"
 #endif
 
@@ -52,7 +52,7 @@
  */
 void GcodeSuite::M24() {
 
-  #if DGUS_LCD_UI_MKS
+  #if ENABLED(DGUS_LCD_UI_MKS)
     if ((print_job_timer.isPaused() || print_job_timer.isRunning()) && !parser.seen("ST"))
       MKS_resume_print_move();
   #endif
@@ -60,6 +60,7 @@ void GcodeSuite::M24() {
   #if ENABLED(POWER_LOSS_RECOVERY)
     if (parser.seenval('S')) card.setIndex(parser.value_long());
     if (parser.seenval('T')) print_job_timer.resume(parser.value_long());
+    recovery.recoveryPrepare = false;
   #endif
 
   #if ENABLED(PARK_HEAD_ON_PAUSE)

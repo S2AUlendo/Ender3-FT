@@ -37,7 +37,7 @@ static SPISettings spiConfig;
 // Public functions
 // ------------------------
 
-#if ANY(SOFTWARE_SPI, FORCE_SOFT_SPI)
+#if ENABLED(SOFTWARE_SPI)
 
   // ------------------------
   // Software SPI
@@ -169,7 +169,7 @@ static SPISettings spiConfig;
     SPI.setMOSI(SD_MOSI_PIN);
     SPI.setSCLK(SD_SCK_PIN);
 
-    SPI.begin();
+    SPI.beginTransaction(spiConfig);
   }
 
   /**
